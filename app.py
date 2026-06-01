@@ -185,6 +185,11 @@ elif st.session_state.setup_step == 4:
         c3.metric("Bilan (Épargne)", f"{epargne_mois:.2f} €")
         st.divider()
 
+        # Calcul global et robuste de l'épargne totale (Correction du bug)
+        total_rev_global = df[df['Type'] == 'Revenu']['Montant'].sum()
+        total_dep_global = df[df['Type'] == 'Dépense']['Montant'].sum()
+        epargne_totale = float(total_rev_global - total_dep_global)
+
         # AFFICHAGE DYNAMIQUE SELON LE PROJET
         if profil['projet_type'] == "Indépendance (Louer un appartement)":
             st.subheader("Analyse du dossier de location")
@@ -196,15 +201,12 @@ elif st.session_state.setup_step == 4:
             if taux_effort <= 33: c_loyer.success("Revenus suffisants pour ce loyer.")
             else: c_loyer.error("Revenus trop faibles pour ce loyer (Garant obligatoire).")
                 
-            # Calcul de l'épargne cumulée pour la caution
-            epargne_totale = df.groupby('Mois').apply(lambda x: x[x['Type']=='Revenu']['Montant'].sum() - x[x['Type']=='Dépense']['Montant'].sum()).sum()
             progress_apport = min(epargne_totale / profil['apport_vise'], 1.0) if profil['apport_vise'] > 0 else 1.0
             c_apport.write(f"Constitution de l'apport : {epargne_totale:.2f} € / {profil['apport_vise']:.2f} €")
             c_apport.progress(progress_apport)
 
         elif profil['projet_type'] == "Achat ciblé (Véhicule, Matériel...)":
             st.subheader("Progression de l'achat")
-            epargne_totale = df.groupby('Mois').apply(lambda x: x[x['Type']=='Revenu']['Montant'].sum() - x[x['Type']=='Dépense']['Montant'].sum()).sum()
             cible = profil['montant_achat']
             
             st.write(f"Fonds sécurisés : {epargne_totale:.2f} € / {cible:.2f} €")
@@ -213,7 +215,6 @@ elif st.session_state.setup_step == 4:
         elif profil['projet_type'] == "Matelas de sécurité (Épargner sans but précis)":
             st.subheader("Fonds d'urgence")
             cible = profil['salaire_base'] * profil['mois_securite']
-            epargne_totale = df.groupby('Mois').apply(lambda x: x[x['Type']=='Revenu']['Montant'].sum() - x[x['Type']=='Dépense']['Montant'].sum()).sum()
             
             st.write(f"Matelas actuel : {epargne_totale:.2f} € / {cible:.2f} € (Objectif : {profil['mois_securite']} mois de salaire)")
             st.progress(min(epargne_totale / cible, 1.0) if cible > 0 else 1.0)
