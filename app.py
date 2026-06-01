@@ -1,208 +1,237 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.express as px
 import datetime
-from io import BytesIO
+import calendar
 from pypdf import PdfReader
 import re
 
 # ==========================================
 # CONFIGURATION DE LA PAGE
 # ==========================================
-st.set_page_config(page_title="Budget Alternant -> Emménagement", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Gestion de Budget", layout="wide")
 
 # ==========================================
 # INITIALISATION DES DONNÉES (SESSION STATE)
 # ==========================================
-# On initialise un registre de transactions s'il n'existe pas encore
+if 'setup_complete' not in st.session_state:
+    st.session_state.setup_complete = False
+
+if 'user_profile' not in st.session_state:
+    st.session_state.user_profile = {
+        "salaire_base": 970.0,
+        "depenses_fixes": 219.0,
+        "nom_projet": "Emménagement Vitrolles",
+        "montant_projet": 2000.0,
+        "mois_pour_projet": 12,
+        "epargne_mensuelle_cible": 166.67
+    }
+
+CATEGORIES_DEP = ["Courses", "Auto/Transport", "Sorties/Loisirs", "Logement", "Abonnements", "Frais Bancaires", "Autre"]
+CATEGORIES_REV = ["Salaire", "Vente", "Aides (CAF)", "Autre"]
+
 if 'transactions' not in st.session_state:
-    # On pré-remplit avec tes données de base (Mai 2026)
     initial_data = [
-        {"Date": datetime.date(2026, 5, 5), "Type": "Dépense", "Description": "Assurance Auto", "Montant": 139.0},
-        {"Date": datetime.date(2026, 5, 10), "Type": "Dépense", "Description": "Carburant", "Montant": 70.0},
-        {"Date": datetime.date(2026, 5, 15), "Type": "Dépense", "Description": "Téléphone", "Montant": 10.0}
+        {"Date": datetime.date.today().replace(day=5), "Type": "Dépense", "Catégorie": "Auto/Transport", "Description": "Assurance & Essence", "Montant": 219.0},
     ]
     st.session_state.transactions = pd.DataFrame(initial_data)
 
 # ==========================================
-# FONCTIONS MÉTIER (LOGIQUE DE L'APP)
+# FONCTIONS MÉTIER
 # ==========================================
 def apply_rule_28(date_obj):
-    """
-    Règle de Gestion : Si la date est entre le 25 et le 31,
-    on bascule la transaction au 1er du mois suivant.
-    """
+    """Règle du 28 : Les revenus fin de mois comptent pour le mois suivant."""
     if date_obj.day >= 25:
-        if date_obj.month == 12:
-            return datetime.date(date_obj.year + 1, 1, 1)
-        else:
-            return datetime.date(date_obj.year, date_obj.month + 1, 1)
+        if date_obj.month == 12: return datetime.date(date_obj.year + 1, 1, 1)
+        else: return datetime.date(date_obj.year, date_obj.month + 1, 1)
     return date_obj
 
-def add_transaction(date, type_trans, desc, montant):
-    """Ajoute une transaction au registre après application de la règle du 28."""
-    adjusted_date = apply_rule_28(date)
-    new_row = pd.DataFrame([{
-        "Date": adjusted_date, 
-        "Type": type_trans, 
-        "Description": desc, 
-        "Montant": float(montant)
-    }])
+def add_transaction(date, type_trans, cat, desc, montant):
+    adjusted_date = apply_rule_28(date) if type_trans == "Revenu" else date
+    new_row = pd.DataFrame([{"Date": adjusted_date, "Type": type_trans, "Catégorie": cat, "Description": desc, "Montant": float(montant)}])
     st.session_state.transactions = pd.concat([st.session_state.transactions, new_row], ignore_index=True)
 
-# ==========================================
-# BARRE LATÉRALE (SIMULATEUR ET PARAMÈTRES)
-# ==========================================
-st.sidebar.title("⚙️ Paramètres & Simulateur")
-
-st.sidebar.subheader("Évolution Légale (Salaire)")
-is_year_2 = st.sidebar.checkbox("Passage en 2ème année d'alternance")
-is_21_yo = st.sidebar.checkbox("J'ai fêté mes 21 ans (Décembre 2026)")
-
-# Détermination du salaire de base en fonction des cases cochées
-base_salary = 970.00
-if is_21_yo:
-    base_salary = 1329.54
-elif is_year_2:
-    base_salary = 1159.26
-
-st.sidebar.info(f"💶 Salaire de base actuel estimé : **{base_salary:.2f} €**")
-
-# Bouton Dette (Optionnel, désactivé par défaut comme demandé)
-enable_debt = st.sidebar.checkbox("Activer un plan de remboursement de prêt (Optionnel)")
-if enable_debt:
-    st.sidebar.warning("⚠️ Plan de remboursement activé. Pense à ajouter ta mensualité dans les dépenses.")
-
-# Ajout du salaire mensuel pour le mois en cours
-if st.sidebar.button("Ajouter le salaire ce mois-ci"):
-    add_transaction(datetime.date.today(), "Revenu", "Salaire Alternance", base_salary)
-    # Calculateur CAF Automatique (Se déclenche si le salaire est à la tranche des 21 ans)
-    if base_salary == 1329.54:
-        add_transaction(datetime.date.today(), "Revenu", "Prime d'Activité (CAF)", 210.00)
-        add_transaction(datetime.date.today(), "Revenu", "APL (CAF)", 330.00)
-        st.sidebar.success("Aides CAF ajoutées automatiquement !")
+def days_left_in_month():
+    today = datetime.date.today()
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    return days_in_month - today.day + 1
 
 # ==========================================
-# INTERFACE PRINCIPALE (ONGLETS)
+# PAGE 1 : ASSISTANT DE CONFIGURATION
 # ==========================================
-st.title("📊 Gestion de Budget & Projet Vitrolles")
-
-tab_rev, tab_dep, tab_dash = st.tabs(["🟢 Revenus", "🔴 Dépenses", "🚀 Dashboard"])
-
-# Préparation des données pour l'affichage (Extraction du mois/année pour grouper)
-df = st.session_state.transactions.copy()
-df['Mois'] = pd.to_datetime(df['Date']).dt.to_period('M').astype(str)
-
-# --- ONGLET 1 : REVENUS ---
-with tab_rev:
-    st.header("Entrées d'argent")
+if not st.session_state.setup_complete:
+    st.title("Configuration du profil financier")
+    st.write("Veuillez définir vos paramètres de base pour calibrer le tableau de bord.")
     
-    # Formulaire "Vente Flash"
-    with st.expander("⚡ Ajouter une Vente Flash (Vinted, Leboncoin, etc.)"):
-        with st.form("flash_sale"):
-            col1, col2 = st.columns(2)
-            sale_name = col1.text_input("Nom de la vente")
-            sale_amount = col2.number_input("Montant (€)", min_value=0.0, step=1.0)
-            submitted = st.form_submit_button("Ajouter")
-            if submitted and sale_name and sale_amount > 0:
-                add_transaction(datetime.date.today(), "Revenu", sale_name, sale_amount)
-                st.rerun()
-
-    # Tableau des revenus
-    df_rev = df[df['Type'] == 'Revenu']
-    if not df_rev.empty:
-        # Pivot table pour avoir les mois en colonnes
-        pivot_rev = df_rev.pivot_table(index='Description', columns='Mois', values='Montant', aggfunc='sum', fill_value=0)
-        st.dataframe(pivot_rev, use_container_width=True)
-    else:
-        st.info("Aucun revenu enregistré pour le moment.")
-
-# --- ONGLET 2 : DÉPENSES ---
-with tab_dep:
-    st.header("Sorties d'argent")
-    
-    # Analyseur de Relevé de Compte PDF
-    st.subheader("📄 Analyseur de Relevé Bancaire")
-    st.write("Uploade un relevé PDF. L'algorithme détectera les montants pour les classer.")
-    uploaded_pdf = st.file_uploader("Choisir un fichier PDF", type="pdf")
-    
-    if uploaded_pdf is not None:
-        if st.button("Analyser le PDF"):
-            reader = PdfReader(uploaded_pdf)
-            text_extracted = ""
-            for page in reader.pages:
-                text_extracted += page.extract_text() + "\n"
-            
-            # Algorithme basique d'extraction (Expression Régulière)
-            # Cherche des lignes avec des montants (ex: "Boulangerie -4.50" ou "Virement +150.00")
-            # Note pour l'utilisateur : C'est une simulation simplifiée. Les vrais relevés nécessitent un regex complexe.
-            pattern = re.compile(r"([A-Za-z0-9\s]+?)\s*([+-]?\d+[\.,]\d{2})")
-            matches = pattern.findall(text_extracted)
-            
-            added_count = 0
-            for match in matches:
-                desc = match[0].strip()
-                montant_str = match[1].replace(',', '.')
-                montant = float(montant_str)
-                
-                if montant > 0:
-                    add_transaction(datetime.date.today(), "Revenu", desc, montant)
-                elif montant < 0:
-                    add_transaction(datetime.date.today(), "Dépense", desc, abs(montant))
-                added_count += 1
-            
-            st.success(f"{added_count} transactions identifiées et ajoutées au registre !")
+    with st.form("setup_form"):
+        st.subheader("Revenus")
+        salaire = st.number_input("Salaire mensuel net actuel (€)", value=st.session_state.user_profile["salaire_base"], step=10.0)
+        
+        st.subheader("Charges fixes")
+        fixes = st.number_input("Montant total des frais fixes incontournables (€)", value=st.session_state.user_profile["depenses_fixes"], step=10.0)
+        
+        st.subheader("Objectif principal")
+        col1, col2 = st.columns(2)
+        nom_proj = col1.text_input("Nom du projet", value=st.session_state.user_profile["nom_projet"])
+        montant_proj = col2.number_input("Montant total ciblé (€)", value=st.session_state.user_profile["montant_projet"], step=100.0)
+        
+        mois_proj = st.slider("Durée de réalisation (mois)", min_value=1, max_value=36, value=st.session_state.user_profile["mois_pour_projet"])
+        
+        epargne_calc = montant_proj / mois_proj if mois_proj > 0 else montant_proj
+        st.info(f"Objectif : {montant_proj} € en {mois_proj} mois. Épargne requise : {epargne_calc:.2f} € / mois.")
+        
+        submitted = st.form_submit_button("Valider et générer le tableau de bord")
+        if submitted:
+            st.session_state.user_profile = {
+                "salaire_base": salaire,
+                "depenses_fixes": fixes,
+                "nom_projet": nom_proj,
+                "montant_projet": montant_proj,
+                "mois_pour_projet": mois_proj,
+                "epargne_mensuelle_cible": epargne_calc
+            }
+            st.session_state.setup_complete = True
             st.rerun()
 
-    # Tableau des dépenses
-    df_dep = df[df['Type'] == 'Dépense']
-    if not df_dep.empty:
-        pivot_dep = df_dep.pivot_table(index='Description', columns='Mois', values='Montant', aggfunc='sum', fill_value=0)
-        st.dataframe(pivot_dep, use_container_width=True)
-    else:
-        st.info("Aucune dépense enregistrée.")
-
-# --- ONGLET 3 : DASHBOARD ---
-with tab_dash:
-    st.header("Visualisation & Objectif Vitrolles")
+# ==========================================
+# PAGE 2 : APPLICATION PRINCIPALE
+# ==========================================
+else:
+    df = st.session_state.transactions.copy()
+    df['Mois'] = pd.to_datetime(df['Date']).dt.to_period('M').astype(str)
+    current_month_str = datetime.date.today().strftime('%Y-%m')
     
-    # Calculs globaux
-    total_revenus = df[df['Type'] == 'Revenu']['Montant'].sum()
-    total_depenses = df[df['Type'] == 'Dépense']['Montant'].sum()
-    epargne_cumulee = total_revenus - total_depenses
-    
-    # Calcul des revenus du mois en cours (pour le trigger Feu Vert)
-    current_month = datetime.date.today().strftime('%Y-%m')
-    revenus_du_mois = df[(df['Type'] == 'Revenu') & (df['Mois'] == current_month)]['Montant'].sum()
-    
-    # --- SYSTÈME DE TRIGGERS ---
-    # Objectifs : Epargne >= 2000 € ET Revenus du mois >= 2300 €
-    if epargne_cumulee >= 2000 and revenus_du_mois >= 2300:
-        st.success("### 🚀 FEU VERT EMMÉNAGEMENT ! \nFélicitations ! Tu as l'épargne nécessaire pour la caution/meubles et le revenu mensuel pour rassurer le propriétaire.")
-    else:
-        st.warning(f"### 🐜 Mode Fourmi Activé \nContinue d'épargner ! \n- **Épargne actuelle** : {epargne_cumulee:.2f} € / 2 000.00 € \n- **Revenus ce mois-ci** : {revenus_du_mois:.2f} € / 2 300.00 €")
-    
-    st.divider()
-
-    # --- GRAPHIQUE COMBINÉ ---
-    # On groupe les données par mois
-    df_monthly = df.groupby(['Mois', 'Type'])['Montant'].sum().unstack(fill_value=0).reset_index()
-    
-    # Si le tableau est vide (manque de données de revenus ou dépenses), on le sécurise
-    if 'Revenu' not in df_monthly.columns:
-        df_monthly['Revenu'] = 0.0
-    if 'Dépense' not in df_monthly.columns:
-        df_monthly['Dépense'] = 0.0
+    # --- BARRE LATÉRALE ---
+    st.sidebar.title("Menu")
+    if st.sidebar.button("Modifier le profil"):
+        st.session_state.setup_complete = False
+        st.rerun()
         
-    df_monthly['Benefice Net'] = df_monthly['Revenu'] - df_monthly['Dépense']
-    
-    fig = go.Figure()
-    # Barres pour les revenus (Vert)
-    fig.add_trace(go.Bar(x=df_monthly['Mois'], y=df_monthly['Revenu'], name='Revenus', marker_color='#2ca02c'))
-    # Barres pour les dépenses (Rouge)
-    fig.add_trace(go.Bar(x=df_monthly['Mois'], y=df_monthly['Dépense'], name='Dépenses', marker_color='#d62728'))
-    # Courbe pour le bénéfice net (Jaune)
-    fig.add_trace(go.Scatter(x=df_monthly['Mois'], y=df_monthly['Benefice Net'], name='Bénéfice Net', mode='lines+markers', line=dict(color='#ff7f0e', width=3)))
-    
-    fig.update_layout(title="Évolution de la santé financière par mois", barmode='group', xaxis_title="Mois", yaxis_title="Montant (€)")
-    st.plotly_chart(fig, use_container_width=True)
+    st.sidebar.divider()
+    st.sidebar.subheader("Actions rapides")
+    if st.sidebar.button("Ajouter le salaire du mois"):
+        add_transaction(datetime.date.today(), "Revenu", "Salaire", "Salaire Alternance", st.session_state.user_profile["salaire_base"])
+        if st.session_state.user_profile["salaire_base"] >= 1329.00:
+            add_transaction(datetime.date.today(), "Revenu", "Aides (CAF)", "Prime d'Activité estimée", 210.0)
+            add_transaction(datetime.date.today(), "Revenu", "Aides (CAF)", "APL estimée", 330.0)
+            st.sidebar.success("Salaire et aides ajoutés.")
+        else:
+            st.sidebar.success("Salaire ajouté.")
+            
+    st.sidebar.divider()
+    st.sidebar.subheader("Simulation")
+    simulateur_on = st.sidebar.toggle("Activer mode 'Indépendance'")
+    if simulateur_on:
+        st.sidebar.warning("Simulation active : +750€ de charges fictives appliquées au calcul du reste à vivre.")
+
+    # --- ONGLETS PRINCIPAUX ---
+    tab_dash, tab_rev, tab_dep = st.tabs(["Tableau de bord", "Entrées", "Sorties"])
+
+    # --- ONGLET 1 : TABLEAU DE BORD ---
+    with tab_dash:
+        st.title(f"Projet : {st.session_state.user_profile['nom_projet']}")
+        
+        df_current = df[df['Mois'] == current_month_str]
+        rev_mois = df_current[df_current['Type'] == 'Revenu']['Montant'].sum()
+        dep_mois = df_current[df_current['Type'] == 'Dépense']['Montant'].sum()
+        
+        if simulateur_on:
+            dep_mois += 750.0 
+            
+        epargne_cible = st.session_state.user_profile["epargne_mensuelle_cible"]
+        reste_a_vivre_total = rev_mois - st.session_state.user_profile["depenses_fixes"] - dep_mois - epargne_cible
+        
+        jours_restants = days_left_in_month()
+        budget_jour = reste_a_vivre_total / jours_restants if jours_restants > 0 else 0
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Reste à vivre global (Mois courant)", f"{reste_a_vivre_total:.2f} €")
+        with col2:
+            st.metric("Budget journalier autorisé", f"{budget_jour:.2f} € / jour")
+        with col3:
+            st.metric(f"Épargne cible ({st.session_state.user_profile['mois_pour_projet']} mois)", f"{epargne_cible:.2f} € / mois")
+
+        st.divider()
+        
+        col_g1, col_g2 = st.columns([1, 1])
+        with col_g1:
+            st.subheader("Répartition des dépenses")
+            df_dep_current = df_current[df_current['Type'] == 'Dépense']
+            if simulateur_on:
+                df_fake = pd.DataFrame([
+                    {"Catégorie": "Logement", "Montant": 550.0},
+                    {"Catégorie": "Courses", "Montant": 200.0}
+                ])
+                df_dep_current = pd.concat([df_dep_current, df_fake])
+                
+            if not df_dep_current.empty:
+                # Graphique sobre et épuré
+                fig_donut = px.pie(df_dep_current, values='Montant', names='Catégorie', hole=0.6, color_discrete_sequence=px.colors.sequential.Teal)
+                fig_donut.update_layout(margin=dict(t=0, b=0, l=0, r=0), showlegend=True)
+                st.plotly_chart(fig_donut, use_container_width=True)
+            else:
+                st.info("Données insuffisantes.")
+                
+        with col_g2:
+            st.subheader("Progression de l'épargne")
+            total_rev = df[df['Type'] == 'Revenu']['Montant'].sum()
+            total_dep = df[df['Type'] == 'Dépense']['Montant'].sum()
+            epargne_reelle = total_rev - total_dep
+            
+            cible_totale = st.session_state.user_profile['montant_projet']
+            progress = min(epargne_reelle / cible_totale, 1.0) if cible_totale > 0 else 0
+            if progress < 0: progress = 0.0
+            
+            st.progress(progress)
+            st.write(f"Montant sécurisé : **{epargne_reelle:.2f} €** / {cible_totale:.2f} € ({(progress*100):.1f}%)")
+            
+            if progress >= 1.0:
+                st.success("Statut : Objectif financier atteint.")
+            else:
+                st.warning("Statut : Phase d'épargne en cours.")
+
+    # --- ONGLET 2 : REVENUS ---
+    with tab_rev:
+        st.subheader("Saisie d'un revenu")
+        with st.form("form_rev"):
+            c1, c2, c3 = st.columns(3)
+            cat_rev = c1.selectbox("Catégorie", CATEGORIES_REV)
+            desc_rev = c2.text_input("Description")
+            montant_rev = c3.number_input("Montant (€)", min_value=0.0, step=1.0)
+            if st.form_submit_button("Enregistrer") and desc_rev and montant_rev > 0:
+                add_transaction(datetime.date.today(), "Revenu", cat_rev, desc_rev, montant_rev)
+                st.rerun()
+                
+        st.dataframe(df[df['Type'] == 'Revenu'][['Date', 'Catégorie', 'Description', 'Montant']].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+
+    # --- ONGLET 3 : DÉPENSES & PDF ---
+    with tab_dep:
+        st.subheader("Saisie d'une dépense")
+        with st.form("form_dep"):
+            c1, c2, c3 = st.columns(3)
+            cat_dep = c1.selectbox("Catégorie", CATEGORIES_DEP)
+            desc_dep = c2.text_input("Description")
+            montant_dep = c3.number_input("Montant (€)", min_value=0.0, step=1.0)
+            if st.form_submit_button("Enregistrer") and desc_dep and montant_dep > 0:
+                add_transaction(datetime.date.today(), "Dépense", cat_dep, desc_dep, montant_dep)
+                st.rerun()
+
+        with st.expander("Importation depuis relevé bancaire (PDF)"):
+            uploaded_pdf = st.file_uploader("Sélectionner un fichier PDF", type="pdf")
+            if uploaded_pdf and st.button("Lancer l'analyse"):
+                reader = PdfReader(uploaded_pdf)
+                text_ext = "".join([page.extract_text() + "\n" for page in reader.pages])
+                pattern = re.compile(r"([A-Za-z0-9\s]+?)\s*([+-]?\d+[\.,]\d{2})")
+                
+                count = 0
+                for match in pattern.findall(text_ext):
+                    desc = match[0].strip()
+                    val = float(match[1].replace(',', '.'))
+                    if val > 0: add_transaction(datetime.date.today(), "Revenu", "Autre", desc, val)
+                    elif val < 0: add_transaction(datetime.date.today(), "Dépense", "Autre", desc, abs(val))
+                    count += 1
+                st.success(f"Analyse terminée : {count} opérations ajoutées.")
+                st.rerun()
+
+        st.dataframe(df[df['Type'] == 'Dépense'][['Date', 'Catégorie', 'Description', 'Montant']].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
