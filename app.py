@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import datetime
-import calendar
 import re
 from pypdf import PdfReader
 
@@ -16,7 +14,7 @@ st.set_page_config(page_title="Logiciel de Gestion Financière", layout="wide")
 # INITIALISATION EN MÉMOIRE (SESSION STATE)
 # ==========================================
 if 'setup_step' not in st.session_state:
-    st.session_state.setup_step = 1  # L'assistant commence à l'étape 1
+    st.session_state.setup_step = 1
 
 if 'user_profile' not in st.session_state:
     st.session_state.user_profile = {}
@@ -28,7 +26,7 @@ if 'df_charges_fixes' not in st.session_state:
     ])
 
 if 'transactions' not in st.session_state:
-    st.session_state.transactions = pd.DataFrame(columns=["Date", "Mois", "Type", "Catégorie", "Description", "Montant", "Nature"])
+    st.session_state.transactions = pd.DataFrame(columns=["Date", "Mois", "Type", "Catégorie", "Description", "Montant"])
 
 if 'closed_months' not in st.session_state:
     st.session_state.closed_months = []
@@ -49,8 +47,7 @@ def apply_rule_28(date_obj):
 def add_transaction(date_obj, type_trans, cat, desc, montant):
     adjusted_date = apply_rule_28(date_obj) if type_trans == "Revenu" else date_obj
     mois_str = adjusted_date.strftime('%Y-%m')
-    nature = "Besoin" if cat in CATEGORIES_BESOINS else ("Envie" if cat in CATEGORIES_ENVIES else "Revenu")
-    new_row = pd.DataFrame([{"Date": adjusted_date, "Mois": mois_str, "Type": type_trans, "Catégorie": cat, "Description": desc, "Montant": float(montant), "Nature": nature}])
+    new_row = pd.DataFrame([{"Date": adjusted_date, "Mois": mois_str, "Type": type_trans, "Catégorie": cat, "Description": desc, "Montant": float(montant)}])
     st.session_state.transactions = pd.concat([st.session_state.transactions, new_row], ignore_index=True)
 
 # ==========================================
@@ -60,7 +57,6 @@ if st.session_state.setup_step < 4:
     st.title("Configuration du Profil Financier")
     st.progress(st.session_state.setup_step / 3.0)
 
-    # --- ÉTAPE 1 : CHOIX DU PROJET ---
     if st.session_state.setup_step == 1:
         st.header("Étape 1 : Quel est votre objectif principal ?")
         projet_type = st.radio("Sélectionnez la nature de votre projet :", [
@@ -68,33 +64,24 @@ if st.session_state.setup_step < 4:
             "Achat ciblé (Véhicule, Matériel...)", 
             "Matelas de sécurité (Épargner sans but précis)"
         ])
-        
         if st.button("Suivant"):
             st.session_state.user_profile['projet_type'] = projet_type
             st.session_state.setup_step = 2
             st.rerun()
 
-    # --- ÉTAPE 2 : DÉTAILS DYNAMIQUES DU PROJET ---
     elif st.session_state.setup_step == 2:
         st.header("Étape 2 : Détails du projet")
-        
-        # Formulaire dynamique selon le choix précédent
         if st.session_state.user_profile['projet_type'] == "Indépendance (Louer un appartement)":
-            st.write("Pour un logement, l'important est la capacité mensuelle (Loyer + Charges) et l'apport (Caution + Meubles).")
             loyer_vise = st.number_input("Loyer maximum envisagé (Charges comprises) (€)", value=500.0, step=50.0)
             apport_vise = st.number_input("Épargne de départ nécessaire (Caution + Meubles) (€)", value=1500.0, step=100.0)
             st.session_state.user_profile['loyer_vise'] = loyer_vise
             st.session_state.user_profile['apport_vise'] = apport_vise
             
         elif st.session_state.user_profile['projet_type'] == "Achat ciblé (Véhicule, Matériel...)":
-            st.write("Pour un achat, l'important est le prix total et le délai que vous vous accordez.")
             montant_achat = st.number_input("Prix total estimé (€)", value=3000.0, step=100.0)
-            delai_mois = st.slider("Dans combien de mois souhaitez-vous réaliser cet achat ?", 1, 48, 12)
             st.session_state.user_profile['montant_achat'] = montant_achat
-            st.session_state.user_profile['delai_mois'] = delai_mois
             
         elif st.session_state.user_profile['projet_type'] == "Matelas de sécurité (Épargner sans but précis)":
-            st.write("L'objectif est d'atteindre un fonds d'urgence équivalent à plusieurs mois de salaire.")
             mois_securite = st.slider("Combien de mois de salaire voulez-vous sécuriser ?", 1, 12, 3)
             st.session_state.user_profile['mois_securite'] = mois_securite
 
@@ -106,19 +93,14 @@ if st.session_state.setup_step < 4:
             st.session_state.setup_step = 3
             st.rerun()
 
-    # --- ÉTAPE 3 : REVENUS & MULTIPLES CHARGES FIXES ---
     elif st.session_state.setup_step == 3:
         st.header("Étape 3 : Vos flux réguliers")
-        
         col_rev, col_dep = st.columns([1, 1.5])
         with col_rev:
             st.subheader("Revenus")
             salaire = st.number_input("Revenu mensuel net (€)", value=970.0, step=10.0)
-            foyer = st.number_input("Personnes dans le foyer", value=1, min_value=1)
-            
         with col_dep:
-            st.subheader("Charges fixes")
-            st.write("Listez toutes vos dépenses incompressibles ci-dessous :")
+            st.subheader("Charges fixes incompressibles")
             edited_charges = st.data_editor(
                 st.session_state.df_charges_fixes,
                 num_rows="dynamic",
@@ -138,10 +120,9 @@ if st.session_state.setup_step < 4:
             st.rerun()
         if col2.button("Finaliser et Lancer", type="primary"):
             st.session_state.user_profile['salaire_base'] = salaire
-            st.session_state.user_profile['foyer'] = foyer
             st.session_state.user_profile['depenses_fixes'] = total_fixes
             st.session_state.df_charges_fixes = edited_charges
-            st.session_state.setup_step = 4 # Lance l'application
+            st.session_state.setup_step = 4
             st.rerun()
 
 # ==========================================
@@ -153,9 +134,17 @@ elif st.session_state.setup_step == 4:
     mois_dispos = sorted(list(set(df['Mois'].tolist() + [current_m])), reverse=True)
     profil = st.session_state.user_profile
     
+    # --- MENU LATÉRAL ---
     st.sidebar.title("Menu")
     selected_month = st.sidebar.selectbox("Mois de travail", mois_dispos)
     
+    st.sidebar.divider()
+    # LE BOUTON SALAIRE EST DE RETOUR ICI
+    if st.sidebar.button(f"Ajouter mon Salaire ({profil['salaire_base']} €)"):
+        add_transaction(datetime.date.today(), "Revenu", "Salaire", "Salaire mensuel", profil['salaire_base'])
+        st.rerun()
+
+    st.sidebar.divider()
     if st.sidebar.button("Clôturer ce mois"):
         if selected_month not in st.session_state.closed_months:
             st.session_state.closed_months.append(selected_month)
@@ -169,13 +158,16 @@ elif st.session_state.setup_step == 4:
         st.session_state.setup_step = 1
         st.rerun()
 
+    # --- CALCULS DU MOIS SÉLECTIONNÉ ---
     df_selected = df[df['Mois'] == selected_month]
     rev_mois = df_selected[df_selected['Type'] == 'Revenu']['Montant'].sum()
     dep_mois = df_selected[df_selected['Type'] == 'Dépense']['Montant'].sum()
     epargne_mois = rev_mois - dep_mois
 
-    tab_dash, tab_transac = st.tabs(["Tableau de bord", "Saisie des opérations"])
+    # LES 3 ONGLETS SONT DE RETOUR
+    tab_dash, tab_transac, tab_import = st.tabs(["Tableau de bord", "Saisie des opérations", "Import PDF"])
 
+    # --- ONGLET 1 : DASHBOARD ---
     with tab_dash:
         st.title(f"Projet : {profil['projet_type']}")
         
@@ -185,40 +177,50 @@ elif st.session_state.setup_step == 4:
         c3.metric("Bilan (Épargne)", f"{epargne_mois:.2f} €")
         st.divider()
 
-        # Calcul global et robuste de l'épargne totale (Correction du bug)
         total_rev_global = df[df['Type'] == 'Revenu']['Montant'].sum()
         total_dep_global = df[df['Type'] == 'Dépense']['Montant'].sum()
         epargne_totale = float(total_rev_global - total_dep_global)
 
-        # AFFICHAGE DYNAMIQUE SELON LE PROJET
-        if profil['projet_type'] == "Indépendance (Louer un appartement)":
-            st.subheader("Analyse du dossier de location")
-            loyer = profil['loyer_vise']
-            taux_effort = (loyer / rev_mois) * 100 if rev_mois > 0 else 100
-            
-            c_loyer, c_apport = st.columns(2)
-            c_loyer.metric("Taux d'effort (Objectif < 33%)", f"{taux_effort:.1f}%", delta_color="inverse")
-            if taux_effort <= 33: c_loyer.success("Revenus suffisants pour ce loyer.")
-            else: c_loyer.error("Revenus trop faibles pour ce loyer (Garant obligatoire).")
+        col_analyse, col_graph = st.columns([1, 1])
+
+        with col_analyse:
+            if profil['projet_type'] == "Indépendance (Louer un appartement)":
+                st.subheader("Analyse du dossier de location")
+                loyer = profil['loyer_vise']
+                taux_effort = (loyer / rev_mois) * 100 if rev_mois > 0 else 100
                 
-            progress_apport = min(epargne_totale / profil['apport_vise'], 1.0) if profil['apport_vise'] > 0 else 1.0
-            c_apport.write(f"Constitution de l'apport : {epargne_totale:.2f} € / {profil['apport_vise']:.2f} €")
-            c_apport.progress(progress_apport)
+                st.metric("Taux d'effort (Objectif < 33%)", f"{taux_effort:.1f}%", delta_color="inverse")
+                if taux_effort <= 33: st.success("Revenus suffisants pour ce loyer.")
+                else: st.error("Revenus trop faibles pour ce loyer (Garant obligatoire).")
+                    
+                progress_apport = min(epargne_totale / profil['apport_vise'], 1.0) if profil['apport_vise'] > 0 else 1.0
+                st.write(f"Constitution de l'apport : {epargne_totale:.2f} € / {profil['apport_vise']:.2f} €")
+                st.progress(progress_apport)
 
-        elif profil['projet_type'] == "Achat ciblé (Véhicule, Matériel...)":
-            st.subheader("Progression de l'achat")
-            cible = profil['montant_achat']
-            
-            st.write(f"Fonds sécurisés : {epargne_totale:.2f} € / {cible:.2f} €")
-            st.progress(min(epargne_totale / cible, 1.0) if cible > 0 else 1.0)
+            elif profil['projet_type'] == "Achat ciblé (Véhicule, Matériel...)":
+                st.subheader("Progression de l'achat")
+                cible = profil['montant_achat']
+                st.write(f"Fonds sécurisés : {epargne_totale:.2f} € / {cible:.2f} €")
+                st.progress(min(epargne_totale / cible, 1.0) if cible > 0 else 1.0)
 
-        elif profil['projet_type'] == "Matelas de sécurité (Épargner sans but précis)":
-            st.subheader("Fonds d'urgence")
-            cible = profil['salaire_base'] * profil['mois_securite']
-            
-            st.write(f"Matelas actuel : {epargne_totale:.2f} € / {cible:.2f} € (Objectif : {profil['mois_securite']} mois de salaire)")
-            st.progress(min(epargne_totale / cible, 1.0) if cible > 0 else 1.0)
+            elif profil['projet_type'] == "Matelas de sécurité (Épargner sans but précis)":
+                st.subheader("Fonds d'urgence")
+                cible = profil['salaire_base'] * profil['mois_securite']
+                st.write(f"Matelas actuel : {epargne_totale:.2f} € / {cible:.2f} €")
+                st.progress(min(epargne_totale / cible, 1.0) if cible > 0 else 1.0)
 
+        with col_graph:
+            # LE GRAPHIQUE EST DE RETOUR
+            st.subheader("Répartition de vos dépenses")
+            df_dep_mois = df_selected[df_selected['Type'] == 'Dépense']
+            if not df_dep_mois.empty:
+                fig = px.pie(df_dep_mois, values='Montant', names='Catégorie', hole=0.5)
+                fig.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Ajoutez des dépenses pour voir le graphique.")
+
+    # --- ONGLET 2 : SAISIE ---
     with tab_transac:
         st.subheader("Ajouter une opération")
         with st.form("ajout_transac"):
@@ -232,3 +234,23 @@ elif st.session_state.setup_step == 4:
                 st.rerun()
                 
         st.dataframe(df_selected[['Date', 'Type', 'Catégorie', 'Description', 'Montant']].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+
+    # --- ONGLET 3 : IMPORT PDF ---
+    with tab_import:
+        st.subheader("Importer un relevé bancaire (PDF)")
+        st.write("Glissez votre relevé ici. Le système détectera automatiquement les entrées et sorties.")
+        uploaded_pdf = st.file_uploader("Fichier PDF", type="pdf")
+        if uploaded_pdf and st.button("Lancer l'analyse"):
+            reader = PdfReader(uploaded_pdf)
+            text_ext = "".join([page.extract_text() + "\n" for page in reader.pages])
+            pattern = re.compile(r"([A-Za-z0-9\s]+?)\s*([+-]?\d+[\.,]\d{2})")
+            
+            count = 0
+            for match in pattern.findall(text_ext):
+                desc = match[0].strip()
+                val = float(match[1].replace(',', '.'))
+                if val > 0: add_transaction(datetime.date.today(), "Revenu", "Autre", desc, val)
+                elif val < 0: add_transaction(datetime.date.today(), "Dépense", "Autre", desc, abs(val))
+                count += 1
+            st.success(f"Analyse terminée : {count} opérations trouvées et ajoutées au mois en cours.")
+            st.rerun()
