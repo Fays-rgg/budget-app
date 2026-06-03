@@ -4,6 +4,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import datetime
 import re
+import os
+import json
 from pypdf import PdfReader
 
 # ==========================================
@@ -12,28 +14,60 @@ from pypdf import PdfReader
 st.set_page_config(page_title="Gestion Financière Pro", layout="wide")
 
 # ==========================================
+# FONCTIONS DE SAUVEGARDE (AUTO-SAVE)
+# ==========================================
+def save_state():
+    """Sauvegarde toutes les données dans des fichiers locaux."""
+    # Sauvegarde du profil et de l'étape
+    data = {
+        "setup_step": st.session_state.setup_step,
+        "user_profile": st.session_state.user_profile,
+        "closed_months": st.session_state.closed_months
+    }
+    with open("profil.json", "w") as f:
+        json.dump(data, f)
+        
+    # Sauvegarde des tableaux (CSV)
+    st.session_state.df_charges_actuelles.to_csv("charges_actuelles.csv", index=False)
+    st.session_state.df_charges_futures.to_csv("charges_futures.csv", index=False)
+    st.session_state.transactions.to_csv("transactions.csv", index=False)
+
+def load_state():
+    """Charge les données si les fichiers de sauvegarde existent."""
+    if os.path.exists("profil.json"):
+        with open("profil.json", "r") as f:
+            data = json.load(f)
+        st.session_state.setup_step = data["setup_step"]
+        st.session_state.user_profile = data["user_profile"]
+        st.session_state.closed_months = data["closed_months"]
+        
+    if os.path.exists("charges_actuelles.csv"):
+        st.session_state.df_charges_actuelles = pd.read_csv("charges_actuelles.csv")
+    if os.path.exists("charges_futures.csv"):
+        st.session_state.df_charges_futures = pd.read_csv("charges_futures.csv")
+    if os.path.exists("transactions.csv"):
+        df_trans = pd.read_csv("transactions.csv")
+        df_trans['Date'] = pd.to_datetime(df_trans['Date']).dt.date
+        st.session_state.transactions = df_trans
+
+# ==========================================
 # INITIALISATION EN MÉMOIRE
 # ==========================================
-if 'setup_step' not in st.session_state:
+if 'init_done' not in st.session_state:
+    # 1. Variables par défaut
     st.session_state.setup_step = 1
-
-if 'user_profile' not in st.session_state:
     st.session_state.user_profile = {}
-
-if 'df_charges_actuelles' not in st.session_state:
     st.session_state.df_charges_actuelles = pd.DataFrame([
         {"Catégorie": "Abonnements", "Description": "Forfait Téléphone", "Montant": 20.0},
         {"Catégorie": "Auto/Transport", "Description": "Assurance Auto", "Montant": 0.0}
     ])
-
-if 'df_charges_futures' not in st.session_state:
     st.session_state.df_charges_futures = pd.DataFrame(columns=["Catégorie", "Description", "Montant"])
-
-if 'transactions' not in st.session_state:
     st.session_state.transactions = pd.DataFrame(columns=["Date", "Mois", "Type", "Catégorie", "Description", "Montant", "Nature"])
-
-if 'closed_months' not in st.session_state:
     st.session_state.closed_months = []
+    
+    # 2. On essaie de charger la sauvegarde
+    load_state()
+    st.session_state.init_done = True
 
 CATEGORIES_BESOINS = ["Logement", "Courses", "Auto/Transport", "Assurances", "Abonnements", "Frais Bancaires", "Santé"]
 CATEGORIES_ENVIES = ["Sorties/Loisirs", "Shopping", "Vacances", "Autre"]
@@ -47,6 +81,7 @@ def add_transaction(date_obj, type_trans, cat, desc, montant):
     nature = "Besoin" if cat in CATEGORIES_BESOINS else ("Envie" if cat in CATEGORIES_ENVIES else "Revenu")
     new_row = pd.DataFrame([{"Date": date_obj, "Mois": mois_str, "Type": type_trans, "Catégorie": cat, "Description": desc, "Montant": float(montant), "Nature": nature}])
     st.session_state.transactions = pd.concat([st.session_state.transactions, new_row], ignore_index=True)
+    save_state() # <-- AUTO-SAVE
 
 # ==========================================
 # ASSISTANT DE CONFIGURATION (PARTIES 1 & 2)
@@ -55,7 +90,7 @@ if st.session_state.setup_step < 4:
     st.title("Configuration de votre Profil")
     st.progress(st.session_state.setup_step / 3.0)
 
-    # --- ÉTAPE 1 : CHOIX DU PROJET ---
+    # --- ÉTAPE 1 ---
     if st.session_state.setup_step == 1:
         st.header("Étape 1 : Quel est votre objectif principal ?")
         projet_type = st.radio("Sélectionnez votre projet de vie :", [
@@ -66,15 +101,16 @@ if st.session_state.setup_step < 4:
         if st.button("Suivant", type="primary"):
             st.session_state.user_profile['projet_type'] = projet_type
             st.session_state.setup_step = 2
+            save_state()
             st.rerun()
 
-    # --- ÉTAPE 2 : DÉTAILS DU PROJET ---
+    # --- ÉTAPE 2 ---
     elif st.session_state.setup_step == 2:
         st.header("Étape 2 : Cadrage du projet")
         projet = st.session_state.user_profile['projet_type']
         
         if projet == "🏠 Prendre mon indépendance (Location)":
-            st.info("💡 Astuce Marché : Un T2/T3 se loue en moyenne entre 800 € et 1050 €/mois. Les agences exigent des revenus égaux à 3 fois le loyer.")
+            st.info("💡 Astuce Marché : Un T2/T3 se loue en moyenne entre 800 € et 1050 €/mois.")
             st.session_state.user_profile['loyer_vise'] = st.number_input("Loyer maximum visé (€)", value=800.0, step=50.0)
             st.session_state.user_profile['apport_vise'] = st.number_input("Apport de départ (Caution + Meubles) (€)", value=2000.0, step=100.0)
             st.session_state.df_charges_futures = pd.DataFrame([
@@ -84,7 +120,7 @@ if st.session_state.setup_step < 4:
             ])
             
         elif projet == "🚗 Acheter un véhicule (Auto / Moto)":
-            st.info("💡 Astuce Auto : Une citadine fiable coûte environ 8000 €. Gardez 500 € pour la carte grise et la première assurance.")
+            st.info("💡 Astuce Auto : Une citadine fiable coûte environ 8000 €.")
             st.session_state.user_profile['montant_achat'] = st.number_input("Prix total estimé du véhicule (€)", value=8000.0, step=500.0)
             st.session_state.user_profile['delai_mois'] = st.slider("Dans combien de mois voulez-vous l'acheter ?", 1, 48, 12)
             st.session_state.df_charges_futures = pd.DataFrame([
@@ -93,7 +129,6 @@ if st.session_state.setup_step < 4:
             ])
 
         elif projet == "🛡️ Créer un Fonds d'Urgence (Sécurité)":
-            st.info("💡 Règle d'or : Un matelas de sécurité doit représenter entre 3 et 6 mois de salaire.")
             st.session_state.user_profile['mois_securite'] = st.slider("Mois de salaire à sécuriser ?", 1, 12, 3)
 
         col1, col2 = st.columns(2)
@@ -102,16 +137,16 @@ if st.session_state.setup_step < 4:
             st.rerun()
         if col2.button("Suivant", type="primary"):
             st.session_state.setup_step = 3
+            save_state()
             st.rerun()
 
-    # --- ÉTAPE 3 : REVENUS ET CHARGES ---
+    # --- ÉTAPE 3 ---
     elif st.session_state.setup_step == 3:
         st.header("Étape 3 : Vos flux réguliers & Compte Bancaire")
         
-        # AJOUT DU SOLDE BANCAIRE RÉEL
         c_compte, c_salaire = st.columns(2)
         with c_compte:
-            st.session_state.user_profile['solde_initial'] = st.number_input("🏦 Solde ACTUEL sur votre compte en banque (€)", value=0.0, step=50.0, help="Combien avez-vous sur votre compte aujourd'hui, avant toute nouvelle dépense ?")
+            st.session_state.user_profile['solde_initial'] = st.number_input("🏦 Solde ACTUEL sur votre compte en banque (€)", value=0.0, step=50.0)
         with c_salaire:
             st.session_state.user_profile['salaire_base'] = st.number_input("💶 Salaire principal prévu ce mois-ci (€)", value=1500.0, step=10.0)
 
@@ -136,6 +171,7 @@ if st.session_state.setup_step < 4:
             st.session_state.user_profile['total_actuel'] = edited_actuelles['Montant'].sum()
             st.session_state.user_profile['total_futur'] = edited_futures['Montant'].sum()
             st.session_state.setup_step = 4
+            save_state() # <-- AUTO-SAVE
             st.rerun()
 
 # ==========================================
@@ -172,11 +208,13 @@ elif st.session_state.setup_step == 4:
             next_month_date = datetime.date.today().replace(day=1) + datetime.timedelta(days=32)
             for _, row in st.session_state.df_charges_actuelles.iterrows():
                 add_transaction(next_month_date.replace(day=1), "Dépense", row["Catégorie"], f"{row['Description']} (Auto)", row["Montant"])
+            save_state() # <-- AUTO-SAVE
             st.rerun()
             
     st.sidebar.divider()
     if st.sidebar.button("⚙️ Recommencer la configuration", use_container_width=True):
         st.session_state.setup_step = 1
+        save_state()
         st.rerun()
 
     # --- CALCULS DU MOIS ---
@@ -185,7 +223,6 @@ elif st.session_state.setup_step == 4:
     dep_mois = df_selected[df_selected['Type'] == 'Dépense']['Montant'].sum()
     epargne_mois = rev_mois - dep_mois
     
-    # CALCUL DU SOLDE RÉEL
     epargne_totale = df[df['Type'] == 'Revenu']['Montant'].sum() - df[df['Type'] == 'Dépense']['Montant'].sum()
     solde_bancaire_actuel = profil.get('solde_initial', 0.0) + epargne_totale
 
@@ -200,7 +237,6 @@ elif st.session_state.setup_step == 4:
         if profil['projet_type'] == "🏠 Prendre mon indépendance (Location)":
             reste_futur -= loyer_simule
 
-        # AFFICHAGE DU NOUVEAU SOLDE BANCAIRE
         c1, c2, c3 = st.columns(3)
         c1.metric("🏦 Solde en Banque", f"{solde_bancaire_actuel:.2f} €", "Votre vrai solde (Aujourd'hui)")
         c2.metric("Bilan du mois", f"{epargne_mois:.2f} €", f"Entrées: {rev_mois}€ | Sorties: {dep_mois}€")
@@ -251,7 +287,6 @@ elif st.session_state.setup_step == 4:
 
             st.write("**Évolution de l'épargne**")
             if not df.empty:
-                # Calcul sécurisé (ne crash pas si le tableau est vide)
                 df_hist = df.groupby('Mois').apply(lambda x: x[x['Type']=='Revenu']['Montant'].sum() - x[x['Type']=='Dépense']['Montant'].sum()).reset_index()
                 df_hist.columns = ['Mois', 'Epargne_Nette']
                 df_hist['Cumul'] = df_hist['Epargne_Nette'].cumsum()
@@ -282,12 +317,12 @@ elif st.session_state.setup_step == 4:
         with c_suppr:
             st.subheader("🗑️ Supprimer une ligne")
             if not df_selected.empty:
-                # Formatage du menu déroulant pour trouver facilement la ligne
                 options_dict = {i: f"{row['Date']} - {row['Description']} ({row['Montant']}€)" for i, row in df_selected.iterrows()}
                 op_to_delete = st.selectbox("Choisissez l'opération à retirer :", options=list(options_dict.keys()), format_func=lambda x: options_dict[x])
                 
                 if st.button("Supprimer définitivement", type="primary"):
                     st.session_state.transactions = st.session_state.transactions.drop(op_to_delete)
+                    save_state() # <-- AUTO-SAVE
                     st.rerun()
             else:
                 st.info("Aucune opération ce mois-ci.")
@@ -304,7 +339,6 @@ elif st.session_state.setup_step == 4:
             reader = PdfReader(uploaded_pdf)
             text_ext = "".join([page.extract_text() + "\n" for page in reader.pages])
             
-            # Filtre Caisse d'Epargne (exclut le solde global)
             pattern = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(?:\d{2}/\d{2}/\d{4})\s+(.*?)([+-]\s?\d{1,3}(?:\s?\d{3})*,\d{2})")
             
             count = 0
@@ -324,5 +358,5 @@ elif st.session_state.setup_step == 4:
                 elif val < 0: add_transaction(trans_date, "Dépense", "Autre", desc[:40], abs(val))
                 count += 1
                 
-            st.success(f"Opération réussie : {count} vraies transactions importées (Les soldes ont été ignorés).")
+            st.success(f"Opération réussie : {count} vraies transactions importées.")
             st.rerun()
