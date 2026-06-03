@@ -146,9 +146,22 @@ elif st.session_state.setup_step == 4:
     selected_month = st.sidebar.selectbox("Sélectionner le mois", mois_dispos)
     
     st.sidebar.divider()
-    if st.sidebar.button(f"💵 Ajouter Salaire ({profil['salaire_base']} €)", use_container_width=True):
-        add_transaction(datetime.date.today(), "Revenu", "Salaire", "Salaire mensuel", profil['salaire_base'])
+    
+    # NOUVEAU MODULE : ENTRÉES RAPIDES ET MODIFIABLES
+    st.sidebar.subheader("💵 Entrées Rapides")
+    
+    # Salaire
+    salaire_reel = st.sidebar.number_input("Salaire exact reçu ce mois-ci (€)", value=float(profil['salaire_base']), step=10.0)
+    if st.sidebar.button("Ajouter ce Salaire", use_container_width=True):
+        add_transaction(datetime.date.today(), "Revenu", "Salaire", "Salaire mensuel", salaire_reel)
         st.rerun()
+
+    # CAF
+    caf_reelle = st.sidebar.number_input("Aides CAF exactes reçues (€)", value=0.0, step=10.0)
+    if st.sidebar.button("Ajouter la CAF", use_container_width=True):
+        if caf_reelle > 0:
+            add_transaction(datetime.date.today(), "Revenu", "Aides/CAF", "Versement CAF", caf_reelle)
+            st.rerun()
 
     st.sidebar.divider()
     if st.sidebar.button("🔒 Clôturer le mois", type="primary", use_container_width=True):
