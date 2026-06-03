@@ -250,13 +250,18 @@ elif st.session_state.setup_step == 4:
                 st.progress(progress_apport)
 
             st.write("**Évolution de l'épargne**")
-            df_hist = df.groupby('Mois').apply(lambda x: x[x['Type']=='Revenu']['Montant'].sum() - x[x['Type']=='Dépense']['Montant'].sum()).reset_index(name='Epargne_Nette')
-            if not df_hist.empty:
+            if not df.empty:
+                # Calcul sécurisé (ne crash pas si le tableau est vide)
+                df_hist = df.groupby('Mois').apply(lambda x: x[x['Type']=='Revenu']['Montant'].sum() - x[x['Type']=='Dépense']['Montant'].sum()).reset_index()
+                df_hist.columns = ['Mois', 'Epargne_Nette']
                 df_hist['Cumul'] = df_hist['Epargne_Nette'].cumsum()
+                
                 fig_line = go.Figure()
                 fig_line.add_trace(go.Scatter(x=df_hist['Mois'], y=df_hist['Cumul'], mode='lines+markers', name='Épargne', line=dict(color='#2ECC71', width=3)))
                 fig_line.update_layout(height=250, margin=dict(t=10, b=10, l=10, r=10))
                 st.plotly_chart(fig_line, use_container_width=True)
+            else:
+                st.info("Saisissez des revenus ou dépenses pour générer la courbe.")
 
     # --- ONGLET 2 : SAISIE & MODIFICATION ---
     with tab_transac:
