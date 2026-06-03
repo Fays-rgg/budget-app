@@ -106,18 +106,24 @@ if st.session_state.setup_step < 4:
 
     # --- ÉTAPE 3 : REVENUS ET CHARGES ---
     elif st.session_state.setup_step == 3:
-        st.header("Étape 3 : Vos flux réguliers")
+        st.header("Étape 3 : Vos flux réguliers & Compte Bancaire")
         
-        st.subheader("1. Votre Salaire Net Mensuel")
-        st.session_state.user_profile['salaire_base'] = st.number_input("Salaire principal (€)", value=1500.0, step=10.0)
+        # AJOUT DU SOLDE BANCAIRE RÉEL
+        c_compte, c_salaire = st.columns(2)
+        with c_compte:
+            st.session_state.user_profile['solde_initial'] = st.number_input("🏦 Solde ACTUEL sur votre compte en banque (€)", value=0.0, step=50.0, help="Combien avez-vous sur votre compte aujourd'hui, avant toute nouvelle dépense ?")
+        with c_salaire:
+            st.session_state.user_profile['salaire_base'] = st.number_input("💶 Salaire principal prévu ce mois-ci (€)", value=1500.0, step=10.0)
+
+        st.divider()
 
         c_actuelles, c_futures = st.columns(2)
         with c_actuelles:
-            st.subheader("2. Vos charges actuelles")
+            st.subheader("Vos charges actuelles")
             edited_actuelles = st.data_editor(st.session_state.df_charges_actuelles, num_rows="dynamic", use_container_width=True)
             
         with c_futures:
-            st.subheader("3. Simulation des charges futures")
+            st.subheader("Simulation des charges futures")
             edited_futures = st.data_editor(st.session_state.df_charges_futures, num_rows="dynamic", use_container_width=True)
 
         col1, col2 = st.columns(2)
@@ -147,17 +153,13 @@ elif st.session_state.setup_step == 4:
     
     st.sidebar.divider()
     
-    # NOUVEAU MODULE : ENTRÉES RAPIDES ET MODIFIABLES
     st.sidebar.subheader("💵 Entrées Rapides")
-    
-    # Salaire
-    salaire_reel = st.sidebar.number_input("Salaire exact reçu ce mois-ci (€)", value=float(profil['salaire_base']), step=10.0)
+    salaire_reel = st.sidebar.number_input("Salaire reçu ce mois-ci (€)", value=float(profil['salaire_base']), step=10.0)
     if st.sidebar.button("Ajouter ce Salaire", use_container_width=True):
         add_transaction(datetime.date.today(), "Revenu", "Salaire", "Salaire mensuel", salaire_reel)
         st.rerun()
 
-    # CAF
-    caf_reelle = st.sidebar.number_input("Aides CAF exactes reçues (€)", value=0.0, step=10.0)
+    caf_reelle = st.sidebar.number_input("Aides CAF reçues (€)", value=0.0, step=10.0)
     if st.sidebar.button("Ajouter la CAF", use_container_width=True):
         if caf_reelle > 0:
             add_transaction(datetime.date.today(), "Revenu", "Aides/CAF", "Versement CAF", caf_reelle)
@@ -168,7 +170,6 @@ elif st.session_state.setup_step == 4:
         if selected_month not in st.session_state.closed_months:
             st.session_state.closed_months.append(selected_month)
             next_month_date = datetime.date.today().replace(day=1) + datetime.timedelta(days=32)
-            # Recopie automatique des charges actuelles
             for _, row in st.session_state.df_charges_actuelles.iterrows():
                 add_transaction(next_month_date.replace(day=1), "Dépense", row["Catégorie"], f"{row['Description']} (Auto)", row["Montant"])
             st.rerun()
@@ -184,27 +185,28 @@ elif st.session_state.setup_step == 4:
     dep_mois = df_selected[df_selected['Type'] == 'Dépense']['Montant'].sum()
     epargne_mois = rev_mois - dep_mois
     
+    # CALCUL DU SOLDE RÉEL
     epargne_totale = df[df['Type'] == 'Revenu']['Montant'].sum() - df[df['Type'] == 'Dépense']['Montant'].sum()
+    solde_bancaire_actuel = profil.get('solde_initial', 0.0) + epargne_totale
 
-    tab_dash, tab_transac, tab_import = st.tabs(["📊 Tableau de Bord", "✍️ Saisie Manuelle", "📄 Import PDF (Caisse d'Epargne)"])
+    tab_dash, tab_transac, tab_import = st.tabs(["📊 Tableau de Bord", "✍️ Saisie Manuelle & Modification", "📄 Import PDF (Caisse d'Epargne)"])
 
-    # --- ONGLET 1 : LE DASHBOARD ÉPURÉ ---
+    # --- ONGLET 1 : LE DASHBOARD ---
     with tab_dash:
         st.markdown(f"### Objectif : {profil['projet_type']}")
         
-        # 1. EN-TÊTE : LES 3 GROS CHIFFRES (Crash-Test intégré)
         reste_futur = epargne_mois - profil.get('total_futur', 0)
         loyer_simule = profil.get('loyer_vise', 0)
         if profil['projet_type'] == "🏠 Prendre mon indépendance (Location)":
             reste_futur -= loyer_simule
 
+        # AFFICHAGE DU NOUVEAU SOLDE BANCAIRE
         c1, c2, c3 = st.columns(3)
-        c1.metric("Disponible ce mois", f"{epargne_mois:.2f} €", "Reste à vivre actuel")
-        c2.metric("Épargne Globale Sécurisée", f"{epargne_totale:.2f} €")
-        c3.metric("Crash-Test : Reste à vivre FUTUR", f"{reste_futur:.2f} €", "Si votre projet était réalisé", delta_color="normal" if reste_futur > 0 else "inverse")
+        c1.metric("🏦 Solde en Banque", f"{solde_bancaire_actuel:.2f} €", "Votre vrai solde (Aujourd'hui)")
+        c2.metric("Bilan du mois", f"{epargne_mois:.2f} €", f"Entrées: {rev_mois}€ | Sorties: {dep_mois}€")
+        c3.metric("Crash-Test : Reste à vivre FUTUR", f"{reste_futur:.2f} €", "Ce qu'il resterait avec votre projet", delta_color="normal" if reste_futur > 0 else "inverse")
         st.divider()
 
-        # 2. CŒUR DU DASHBOARD
         col_gauche, col_droite = st.columns([1, 1.2])
 
         with col_gauche:
@@ -247,7 +249,6 @@ elif st.session_state.setup_step == 4:
                 st.write(f"Apport (Caution/Meubles) : **{epargne_totale:.2f} € / {profil['apport_vise']:.2f} €**")
                 st.progress(progress_apport)
 
-            # Courbe de prédiction simplifiée
             st.write("**Évolution de l'épargne**")
             df_hist = df.groupby('Mois').apply(lambda x: x[x['Type']=='Revenu']['Montant'].sum() - x[x['Type']=='Dépense']['Montant'].sum()).reset_index(name='Epargne_Nette')
             if not df_hist.empty:
@@ -257,20 +258,40 @@ elif st.session_state.setup_step == 4:
                 fig_line.update_layout(height=250, margin=dict(t=10, b=10, l=10, r=10))
                 st.plotly_chart(fig_line, use_container_width=True)
 
-    # --- ONGLET 2 : SAISIE MANUELLE ---
+    # --- ONGLET 2 : SAISIE & MODIFICATION ---
     with tab_transac:
-        with st.form("ajout_transac"):
-            c1, c2, c3, c4 = st.columns(4)
-            t_type = c1.selectbox("Type", ["Dépense", "Revenu"])
-            t_cat = c2.selectbox("Catégorie", CATEGORIES_BESOINS + CATEGORIES_ENVIES if t_type == "Dépense" else CATEGORIES_REV)
-            t_desc = c3.text_input("Libellé")
-            t_montant = c4.number_input("Montant (€)", min_value=0.0, step=1.0)
-            if st.form_submit_button("Ajouter") and t_desc and t_montant > 0:
-                add_transaction(datetime.date.today(), t_type, t_cat, t_desc, t_montant)
-                st.rerun()
+        c_ajout, c_suppr = st.columns([1.5, 1])
+        
+        with c_ajout:
+            st.subheader("Ajouter une opération")
+            with st.form("ajout_transac"):
+                c1, c2, c3 = st.columns(3)
+                t_type = c1.selectbox("Type", ["Dépense", "Revenu"])
+                t_cat = c2.selectbox("Catégorie", CATEGORIES_BESOINS + CATEGORIES_ENVIES if t_type == "Dépense" else CATEGORIES_REV)
+                t_desc = c3.text_input("Libellé")
+                t_montant = st.number_input("Montant (€)", min_value=0.0, step=1.0)
+                if st.form_submit_button("Ajouter") and t_desc and t_montant > 0:
+                    add_transaction(datetime.date.today(), t_type, t_cat, t_desc, t_montant)
+                    st.rerun()
+                    
+        with c_suppr:
+            st.subheader("🗑️ Supprimer une ligne")
+            if not df_selected.empty:
+                # Formatage du menu déroulant pour trouver facilement la ligne
+                options_dict = {i: f"{row['Date']} - {row['Description']} ({row['Montant']}€)" for i, row in df_selected.iterrows()}
+                op_to_delete = st.selectbox("Choisissez l'opération à retirer :", options=list(options_dict.keys()), format_func=lambda x: options_dict[x])
+                
+                if st.button("Supprimer définitivement", type="primary"):
+                    st.session_state.transactions = st.session_state.transactions.drop(op_to_delete)
+                    st.rerun()
+            else:
+                st.info("Aucune opération ce mois-ci.")
+
+        st.divider()
+        st.write("Historique du mois :")
         st.dataframe(df_selected[['Date', 'Type', 'Catégorie', 'Description', 'Montant']].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
 
-    # --- ONGLET 3 : IMPORT PDF CAISSE D'EPARGNE (PARTIE 4) ---
+    # --- ONGLET 3 : IMPORT PDF ---
     with tab_import:
         st.info("Lecteur intelligent calibré pour les relevés de la Caisse d'Épargne CEPAC.")
         uploaded_pdf = st.file_uploader("Déposez votre relevé PDF", type="pdf")
@@ -278,7 +299,7 @@ elif st.session_state.setup_step == 4:
             reader = PdfReader(uploaded_pdf)
             text_ext = "".join([page.extract_text() + "\n" for page in reader.pages])
             
-            # Filtre chirurgical : Date + Date + Texte + Montant (Exclut les soldes)
+            # Filtre Caisse d'Epargne (exclut le solde global)
             pattern = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(?:\d{2}/\d{2}/\d{4})\s+(.*?)([+-]\s?\d{1,3}(?:\s?\d{3})*,\d{2})")
             
             count = 0
@@ -286,14 +307,11 @@ elif st.session_state.setup_step == 4:
                 date_str, desc, amount_str = match
                 desc = desc.strip()
                 
-                # SÉCURITÉ : On ignore les lignes de Solde Total
                 if "SOLDE" in desc.upper():
                     continue
                     
                 amount_clean = amount_str.replace(" ", "").replace(",", ".")
                 val = float(amount_clean)
-                
-                # Extraction de la date
                 d, m, y = map(int, date_str.split('/'))
                 trans_date = datetime.date(y, m, d)
                 
